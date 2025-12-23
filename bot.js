@@ -18,8 +18,12 @@ const POI = {
     6: "Last attacker",
 }
 
+// Cooldown configuration for handleSpectateCommand (in milliseconds)
+const SPECTATE_COOLDOWN_MS = 5000; // 5 second cooldown
+
 var websocketSessionID;
 var scoreLink = "";
+var spectateCooldowns = new Map(); // Tracks cooldown per user
 
 
 // Start executing the bot from here
@@ -120,9 +124,19 @@ function inRange(val, x, y) {
   return val >= x && val <= y;
 }
 
-function handleSpectateCommand(messageText) {
+function handleSpectateCommand(messageText, chatterId) {
     let parts = messageText.split(" ");
     console.log(parts);
+
+    // Check cooldown
+    const now = Date.now();
+    const lastCooldown = spectateCooldowns.get(chatterId);
+    if (lastCooldown && now - lastCooldown < SPECTATE_COOLDOWN_MS) {
+      const remainingTime = Math.ceil((SPECTATE_COOLDOWN_MS - (now - lastCooldown)) / 1000);
+      sendChatMessage(`Please wait ${remainingTime} second(s) before using !spectate again.`);
+      return;
+    }
+    spectateCooldowns.set(chatterId, now);
 
     if (parts.length == 1) {
       sendChatMessage("Usage: !spectate <name|number (1-6)>");
@@ -131,30 +145,20 @@ function handleSpectateCommand(messageText) {
 
     if (inRange(parseInt(parts[1]), 1, 6)) {
       let targetPOI = POI[parseInt(parts[1])] || null;
-      if (targetPOI) {
-        sendChatMessage("Switching to player of interest: " + targetPOI);
-        sendWebSocketMessage(
-          JSON.stringify({
-            changeCam: { poi: parseInt(parts[1]) },
-          })
-        );
-      } else {
-        sendChatMessage(
-          "POI number " + parts[2] + " is not valid. Must be between 1 and 6."
-        );
-      }
+      sendChatMessage("Switching to player of interest: " + targetPOI);
+      sendWebSocketMessage(
+        JSON.stringify({
+          changeCam: { poi: parseInt(parts[1]) },
+        })
+      );
     }
     else {
       let playerName = "";
-      if (parts.length > 2) {
-        for (let i = 1; i < parts.length; i++) {
-          playerName += parts[i];
-          if (i != parts.length - 1) {
-            playerName += " ";
-          }
+      for (let i = 1; i < parts.length; i++) {
+        playerName += parts[i];
+        if (i != parts.length - 1) {
+          playerName += " ";
         }
-      } else {
-        playerName = parts[1];
       }
 
       sendChatMessage("Switching to player: " + playerName);
@@ -175,7 +179,7 @@ function handleSwapCommand() {
 
 function handleHelpCommand() {
     sendChatMessage(
-      "Commands: !spectate !swap"    
+      "Commands: !spectate !swap !score"    
     );
 }
 
@@ -187,7 +191,7 @@ async function handleScoreCommand() {
   try {
     let response = await fetch(scoreLink);
     if (response.status !== 200) {
-      sendChatMessage("Invalid link set.");
+      sendChatMessage("Invalid link was set.");
       return;
     }
     sendChatMessage(await response.text());
@@ -199,9 +203,8 @@ async function handleScoreCommand() {
 }
 
 async function isModerator(chatterId) {
-  let response = await fetch("https://api.twitch.tv/helix/moderation/moderators?broadcaster_id=" 
-    + process.env.CHANNEL_ID
-    + "&user_id=" + chatterId, {
+  let response = await fetch("https://api.twitch.tv/helix/moderation/moderators" + 
+    "?broadcaster_id=" + process.env.CHANNEL_ID + "&user_id=" + chatterId, {
     method: "GET",
     headers: {
       Authorization: "Bearer " + process.env.OAUTH_TOKEN,
@@ -220,8 +223,7 @@ async function isModerator(chatterId) {
   }
 
   let data = await response.json();
-  if (data.data.length == 0) return false;
-  return true;
+  return data.data.length != 0;
 }
 
 function isBroadcaster(chatterId) {
@@ -243,8 +245,10 @@ async function handleSetScoreCommand(chatterId, newScoreLink) {
     }
   } catch (error) {
     console.error(error);
+    sendChatMessage("Invalid link.");
     return;
   }
+  // TODO: may want to make sure this link follows the right format for OS/summary
   scoreLink = newScoreLink;
   sendChatMessage("Score link set to " + newScoreLink);
 }
@@ -267,7 +271,7 @@ function handleWebSocketMessage(data) {
 
           let command = data.payload.event.message.text.trim().split(" ")[0];
           if (command == "!spectate") {
-            handleSpectateCommand(data.payload.event.message.text.trim());
+            handleSpectateCommand(data.payload.event.message.text.trim(), data.payload.event.chatter_user_id);
           }
           else if (command == "!swap") {
             handleSwapCommand();
