@@ -11,6 +11,10 @@
   "license": "ISC",
   "packageManager": "pnpm@10.25.0",
   "dependencies": {
+    "string-comparison": "^1.3.0",
     "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
   }
 }
