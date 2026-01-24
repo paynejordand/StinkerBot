@@ -33,13 +33,6 @@ async function getAuth(oauthToken, _refreshToken) {
   let response = await validateToken(oauthToken);
 
   if (response.status != 200) {
-    // let data = await response.json();
-    // console.log(response);
-    // console.error(
-    //   "Token is not valid. /oauth2/validate returned status code " +
-    //     response.status
-    // );
-    // console.error(data);
     console.log("-- Attempting to refresh token --");
     let response = await refreshToken(_refreshToken);
     let data = await response.json();
