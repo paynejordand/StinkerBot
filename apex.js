@@ -5,16 +5,74 @@ var wss;
 var swap = new Map();
 var names = new Map();
 const APEX_WEBSOCKET_URL = "ws://localhost:7777";
-export const POI = {
-  1: "Next player",
-  2: "Previous player",
-  3: "Kill leader",
-  4: "Closest enemy",
-  5: "Closest player",
-  6: "Last attacker",
-};
 
 var sessions = new Map();
+
+export class ApexConnection {
+  constructor() {
+    console.log("ApexConnection constructor called.");
+    this.wss = null;
+    this.swap = new Map();
+    this.names = new Map();
+    this.sessions = new Map();
+  }
+  connect() {
+    console.log("ApexConnection connect called.");
+    this.wss = new WebSocketServer({ port: 7777 });
+    return this.wss;
+  }
+
+  handleInitMessage(message, ws) {
+    console.log("Initialization message received.");
+    console.log(message);
+    this.sessions.set(message.name, ws);
+    this.swap.set(ws, true);
+    this.names.set(ws, new Set());
+  }
+
+  handlePlayerConnectedMessage(message, ws) {
+    console.log("Player connected message received: " + message.player.name);
+    const playerNames = this.names.get(ws);
+    if (playerNames) {
+      playerNames.add(message.player.name.toLowerCase());
+    }
+  }
+
+  handleMatchStateEndMessage(message, ws) {
+    console.log("Match state ended message received.");
+    const matchEndNames = this.names.get(ws);
+    if (matchEndNames) {
+      matchEndNames.clear();
+    }
+  }
+
+  handlePlayerDamagedMessage(message, ws) {
+    if (message.attacker.nucleusHash !== "" && this.swap.get(ws)) {
+      // console.log(message);
+      this.swap.set(ws, false);
+      ws.send(JSON.stringify({ changeCam: { name: message.attacker.name } }));
+    }
+  }
+
+  handleSpectateMessage(message, ws) {
+    console.log("--- Spectate Message ---");
+    console.log(message);
+  }
+
+  handleConnectionClosed(ws) {
+    console.log("Client disconnected");
+    // Remove websocket from sessions Map
+    for (const [key, value] of this.sessions.entries()) {
+      if (value === ws) {
+        this.sessions.delete(key);
+        break;
+      }
+    }
+    // Clean up names and swap Maps
+    this.names.delete(ws);
+    this.swap.delete(ws);
+  }
+}
 
 // WebSocket will persist the application loop until you exit the program forcefully
 export function startWebSocketServer(port) {
@@ -50,7 +108,7 @@ export function startWebSocketServer(port) {
 
 function handleMessage(message, ws) {
   //console.log("Handling message: " + message);
-  switch(message.category) {
+  switch (message.category) {
     case "init":
       console.log("Initialization message received.");
       console.log(message);
@@ -76,9 +134,7 @@ function handleMessage(message, ws) {
       if (message.attacker.nucleusHash !== "" && swap.get(ws)) {
         // console.log(message);
         swap.set(ws, false);
-        ws.send(
-          JSON.stringify({ changeCam: { name: message.attacker.name } })
-        );
+        ws.send(JSON.stringify({ changeCam: { name: message.attacker.name } }));
       }
       break;
     case "observerAnnotation":
@@ -101,8 +157,7 @@ export function closestName(broadcaster_id, name) {
   }
 }
 
-export function swapCam(broadcaster_id)
-{
+export function swapCam(broadcaster_id) {
   const ws = sessions.get(broadcaster_id);
   if (ws) {
     swap.set(ws, true);
@@ -114,8 +169,7 @@ export function broadcastMessage(message, broadcaster_id) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     console.log("Sending message to broadcaster: " + message);
     ws.send(message);
-  }
-  else {
+  } else {
     console.log("No active session for broadcaster ID: " + broadcaster_id);
   }
 }
