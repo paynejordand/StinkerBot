@@ -1,32 +1,87 @@
 import WebSocket from "ws";
 import { inRange } from "./util.js";
-import { POI } from "./constants.js";
 
 const EVENTSUB_WEBSOCKET_URL = "wss://eventsub.wss.twitch.tv/ws";
 const SPECTATE_COOLDOWN_MS = 10 * 1000; // 10 second cooldown
 
+var subscription_ids = new Map();
+
 export class TwitchConnection {
-  constructor() {
+  constructor(spectateCallback, swapCallback) {
     console.log("TwitchConnection constructor called.");
     this.ws = null;
     this.websocketSessionID = null;
     this.scoreLink = "";
     this.spectateCooldowns = new Map();
-  }
-
-  get WebSocket() {
-    return this.ws;
-  }
-
-  set sessionID(id) {
-    console.log("Setting TwitchConnection sessionID: " + id);
-    this.websocketSessionID = id;
+    this.spectateCallback = spectateCallback;
+    this.swapCallback = swapCallback;
   }
 
   connect() {
     console.log("TwitchConnection connect called.");
     this.ws = new WebSocket(EVENTSUB_WEBSOCKET_URL);
+    this.ws.on("open", () => {
+      console.log("Twitch EventSub WebSocket connected.");
+    });
+    this.ws.on("message", (data) => {
+      this.handleTwitchWebSocketMessage(JSON.parse(data.toString()));
+    });
     return this.ws;
+  }
+
+  handleTwitchWebSocketMessage(data) {
+    switch (data.metadata.message_type) {
+      case "session_welcome": // First message you get from the WebSocket server when connecting
+        this.websocketSessionID = data.payload.session.id; // Register the Session ID it gives us
+
+        // Listen to EventSub, which joins the chatroom from your bot's account
+        this.registerEventSubListener(process.env.CHANNEL_ID);
+        break;
+      case "notification": // An EventSub notification has occurred, such as channel.chat.message
+        switch (data.metadata.subscription_type) {
+          case "channel.chat.message":
+            // First, print the message to the program's console.
+            console.log(
+              `MSG #${data.payload.event.broadcaster_user_login} <${data.payload.event.chatter_user_login}> ${data.payload.event.message.text}`,
+            );
+            if (
+              data.payload.event.chatter_user_id ==
+                process.env.BOT_CHANNEL_ID ||
+              data.payload.event.broadcaster_id == process.env.BOT_CHANNEL_ID
+            ) {
+              // Ignore messages from the bot itself
+              console.log("Ignoring message from self.");
+              break;
+            }
+
+            const broadcaster_id = data.payload.event.broadcaster_user_id;
+            const message = data.payload.event.message.text.trim();
+
+            const command = message.split(" ")[0];
+            if (command == "!spectate") {
+              this.handleSpectateCommand(message, broadcaster_id);
+            } else if (command == "!swap") {
+              thishandleSwapCommand(broadcaster_id);
+            } else if (command == "!help") {
+              this.handleHelpCommand(broadcaster_id);
+            } else if (command == "!score") {
+              this.handleScoreCommand(broadcaster_id);
+            } else if (command == "!setscore") {
+              this.handleSetScoreCommand(
+                data.payload.event.badges,
+                message.split(" ")[1],
+                broadcaster_id,
+              );
+            } else if (command == "!shuffle") {
+              this.handleShuffleCommand(
+                data.payload.event.badges,
+                broadcaster_id,
+              );
+            }
+            break;
+        }
+        break;
+    }
   }
 
   async registerEventSubListener(broadcaster_id) {
@@ -64,10 +119,45 @@ export class TwitchConnection {
           response.status,
       );
       console.error(data);
-      process.exit(1);
     } else {
       const data = await response.json();
+      subscription_ids[broadcaster_id] = data.data[0].id;
       console.log(`Subscribed to channel.chat.message [${data.data[0].id}]`);
+    }
+  }
+
+  async deregisterEventSubListener(broadcaster_id) {
+    const sub_id = subscription_ids[broadcaster_id];
+    if (!sub_id) {
+      console.log(
+        "No subscription ID found for broadcaster_id: " + broadcaster_id,
+      );
+      return;
+    }
+    console.log(
+      "Deregistering EventSub listener for broadcaster_id: " + broadcaster_id,
+    );
+    let response = await fetch(
+      "https://api.twitch.tv/helix/eventsub/subscriptions?id=" + sub_id,
+      {
+        method: "DELETE",
+        headers: {
+          Authorization: "Bearer " + process.env.OAUTH_TOKEN_BOT,
+          "Client-Id": process.env.CLIENT_ID,
+        },
+      },
+    );
+    console.log("Deregister response status: " + response.status);
+
+    if (response.status != 204) {
+      console.error(
+        "Failed to subscribe to channel.chat.message. API call returned status code " +
+          response.status,
+      );
+      console.error(response);
+    } else {
+      subscription_ids.delete(broadcaster_id);
+      console.log("Successfully unsubscribed from channel.chat.message");
     }
   }
 
@@ -97,7 +187,12 @@ export class TwitchConnection {
   }
 
   handleSpectateCommand(messageText, broadcaster_id) {
-    let parts = messageText.split(" ");
+    const parts = messageText.split(" ");
+
+    if (parts.length == 1) {
+      this.sendChatMessage("Usage: !spectate <name|(1-6)>", broadcaster_id);
+      return { type: "invalid", target: null };
+    }
 
     // Check cooldown
     const now = Date.now();
@@ -110,25 +205,14 @@ export class TwitchConnection {
         `Please wait ${remainingTime} second(s) before using !spectate again.`,
         broadcaster_id,
       );
-      return { type: "invalid", target: null };
+      return;
     }
     this.spectateCooldowns.set(broadcaster_id, now);
 
-    if (parts.length == 1) {
-      this.sendChatMessage("Usage: !spectate <name|(1-6)>", broadcaster_id);
-      return { type: "invalid", target: null };
-    }
-
+    var status = "";
     if (inRange(parseInt(parts[1]), 1, 6)) {
-      let targetPOI = POI[parseInt(parts[1])] || null;
-      this.sendChatMessage(
-        "Switching to player of interest: " + targetPOI,
-        broadcaster_id,
-      );
-      return {
-        type: "poi",
-        target: targetPOI,
-      };
+      let targetPOI = parseInt(parts[1]);
+      status = this.spectateCallback(broadcaster_id, "poi", targetPOI);
     } else {
       let playerName = "";
       for (let i = 1; i < parts.length; i++) {
@@ -138,23 +222,19 @@ export class TwitchConnection {
         }
       }
       console.log("Original player name: " + playerName);
-      //playerName = closestName(broadcaster_id, playerName);
-      this.sendChatMessage(
-        "Switching to player with the closest name to: " + playerName,
-        broadcaster_id,
-      );
-      return {
-        type: "name",
-        target: playerName,
-      };
+      status = this.spectateCallback(broadcaster_id, "name", playerName);
     }
+    console.log("Spectate status: " + status);
+    this.sendChatMessage(status, broadcaster_id);
+    return status;
   }
 
   handleSwapCommand(broadcaster_id) {
-    self.sendChatMessage(
+    this.sendChatMessage(
       "Swapping to next instance of player damage!",
       broadcaster_id,
     );
+    this.swapCallback(broadcaster_id);
   }
 
   async handleSetScoreCommand(badges, newScoreLink, broadcaster_id) {
