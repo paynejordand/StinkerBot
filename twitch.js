@@ -3,16 +3,17 @@ import { inRange } from "./util.js";
 
 const EVENTSUB_WEBSOCKET_URL = "wss://eventsub.wss.twitch.tv/ws";
 const SPECTATE_COOLDOWN_MS = 10 * 1000; // 10 second cooldown
-
-var subscription_ids = new Map();
+const SHUFFLE_COOLDOWN_MS = 30 * 1000; // 30 second cooldown
 
 export class TwitchConnection {
   constructor(spectateCallback, swapCallback) {
     console.log("TwitchConnection constructor called.");
     this.ws = null;
     this.websocketSessionID = null;
-    this.scoreLink = "";
+    this.scores = new Map();
     this.spectateCooldowns = new Map();
+    this.swaps = new Set();
+    this.subscription_ids = new Map();
     this.spectateCallback = spectateCallback;
     this.swapCallback = swapCallback;
   }
@@ -26,9 +27,59 @@ export class TwitchConnection {
     this.ws.on("message", (data) => {
       this.handleTwitchWebSocketMessage(JSON.parse(data.toString()));
     });
+    setInterval(() => this.intervalSwap(), SHUFFLE_COOLDOWN_MS);
     return this.ws;
   }
 
+  // Helper functions
+  intervalSwap() {
+    for (const id of this.swaps) {
+      this.swapCallback(id);
+    }
+  }
+
+  isModerator(badges) {
+    for (const badge of badges) {
+      if (badge.set_id == "moderator") {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  isBroadcaster(badges) {
+    for (const badge of badges) {
+      if (badge.set_id == "broadcaster") {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async sendChatMessage(message, broadcaster_id) {
+    let response = await fetch("https://api.twitch.tv/helix/chat/messages", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + process.env.OAUTH_TOKEN_BOT,
+        "Client-Id": process.env.CLIENT_ID,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        broadcaster_id: broadcaster_id,
+        sender_id: process.env.BOT_CHANNEL_ID,
+        message: message,
+      }),
+    });
+    if (response.status != 200) {
+      let data = await response.json();
+      console.error("Failed to send chat message");
+      console.error(data);
+    } else {
+      console.log("Sent chat message: " + message);
+    }
+  }
+
+  // Websocket Event Handlers
   handleTwitchWebSocketMessage(data) {
     switch (data.metadata.message_type) {
       case "session_welcome": // First message you get from the WebSocket server when connecting
@@ -40,10 +91,6 @@ export class TwitchConnection {
       case "notification": // An EventSub notification has occurred, such as channel.chat.message
         switch (data.metadata.subscription_type) {
           case "channel.chat.message":
-            // First, print the message to the program's console.
-            console.log(
-              `MSG #${data.payload.event.broadcaster_user_login} <${data.payload.event.chatter_user_login}> ${data.payload.event.message.text}`,
-            );
             if (
               data.payload.event.chatter_user_id ==
                 process.env.BOT_CHANNEL_ID ||
@@ -53,28 +100,35 @@ export class TwitchConnection {
               console.log("Ignoring message from self.");
               break;
             }
+            // First, print the message to the program's console.
+            console.log(
+              `MSG #${data.payload.event.broadcaster_user_login} <${data.payload.event.chatter_user_login}> ${data.payload.event.message.text}`,
+            );
+
+            this.swaps.delete(data.payload.event.broadcaster_user_id);
 
             const broadcaster_id = data.payload.event.broadcaster_user_id;
             const message = data.payload.event.message.text.trim();
+            const badges = data.payload.event.badges;
 
             const command = message.split(" ")[0];
             if (command == "!spectate") {
               this.handleSpectateCommand(message, broadcaster_id);
             } else if (command == "!swap") {
-              thishandleSwapCommand(broadcaster_id);
+              this.handleSwapCommand(broadcaster_id);
             } else if (command == "!help") {
               this.handleHelpCommand(broadcaster_id);
             } else if (command == "!score") {
               this.handleScoreCommand(broadcaster_id);
             } else if (command == "!setscore") {
               this.handleSetScoreCommand(
-                data.payload.event.badges,
+                badges,
                 message.split(" ")[1],
                 broadcaster_id,
               );
             } else if (command == "!shuffle") {
               this.handleShuffleCommand(
-                data.payload.event.badges,
+                badges,
                 broadcaster_id,
               );
             }
@@ -121,13 +175,13 @@ export class TwitchConnection {
       console.error(data);
     } else {
       const data = await response.json();
-      subscription_ids[broadcaster_id] = data.data[0].id;
+      this.subscription_ids[broadcaster_id] = data.data[0].id;
       console.log(`Subscribed to channel.chat.message [${data.data[0].id}]`);
     }
   }
 
   async deregisterEventSubListener(broadcaster_id) {
-    const sub_id = subscription_ids[broadcaster_id];
+    const sub_id = this.subscription_ids[broadcaster_id];
     if (!sub_id) {
       console.log(
         "No subscription ID found for broadcaster_id: " + broadcaster_id,
@@ -151,32 +205,14 @@ export class TwitchConnection {
 
     if (response.status != 204) {
       console.error(
-        "Failed to subscribe to channel.chat.message. API call returned status code " +
+        "Failed to unsubscribe to channel.chat.message. API call returned status code " +
           response.status,
       );
       console.error(response);
     } else {
-      subscription_ids.delete(broadcaster_id);
+      this.subscription_ids.delete(broadcaster_id);
       console.log("Successfully unsubscribed from channel.chat.message");
     }
-  }
-
-  isModerator(badges) {
-    for (const badge of badges) {
-      if (badge.set_id == "moderator") {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  isBroadcaster(badges) {
-    for (const badge of badges) {
-      if (badge.set_id == "broadcaster") {
-        return true;
-      }
-    }
-    return false;
   }
 
   handleHelpCommand(broadcaster_id) {
@@ -259,17 +295,17 @@ export class TwitchConnection {
       return;
     }
     // TODO: may want to make sure this link follows the right format for OS/summary
-    this.scoreLink = newScoreLink;
+    this.scores.set(broadcaster_id, newScoreLink);
     this.sendChatMessage("Score link set to " + newScoreLink, broadcaster_id);
   }
 
   async handleScoreCommand(broadcaster_id) {
-    if (!this.scoreLink) {
+    if (!this.scores.has(broadcaster_id)) {
       this.sendChatMessage("No valid link for scores set.", broadcaster_id);
       return;
     }
     try {
-      let response = await fetch(this.scoreLink);
+      let response = await fetch(this.scores.get(broadcaster_id));
       if (response.status !== 200) {
         this.sendChatMessage("Invalid link was set.", broadcaster_id);
         return;
@@ -277,40 +313,26 @@ export class TwitchConnection {
       this.sendChatMessage(await response.text(), broadcaster_id);
     } catch (error) {
       console.error(error);
-      return;
-    }
-  }
-
-  handleShuffleCommand(badges, broadcaster_id) {
-    if (!isModerator(badges) && !isBroadcaster(badges)) {
-      sendChatMessage(
-        "Only mods in this channel can use this command!",
+      this.sendChatMessage(
+        "Error fetching score link. If it is before the first game is over this is expected!",
         broadcaster_id,
       );
       return;
     }
   }
 
-  async sendChatMessage(message, broadcaster_id) {
-    let response = await fetch("https://api.twitch.tv/helix/chat/messages", {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer " + process.env.OAUTH_TOKEN_BOT,
-        "Client-Id": process.env.CLIENT_ID,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        broadcaster_id: broadcaster_id,
-        sender_id: process.env.BOT_CHANNEL_ID,
-        message: message,
-      }),
-    });
-    if (response.status != 200) {
-      let data = await response.json();
-      console.error("Failed to send chat message");
-      console.error(data);
-    } else {
-      console.log("Sent chat message: " + message);
+  handleShuffleCommand(badges, broadcaster_id) {
+    if (!this.isModerator(badges) && !this.isBroadcaster(badges)) {
+      this.sendChatMessage(
+        "Only mods in this channel can use this command!",
+        broadcaster_id,
+      );
+      return;
     }
+    this.swaps.add(broadcaster_id);
+    this.sendChatMessage(
+      "Will now cycle through damage events!",
+      broadcaster_id,
+    );
   }
 }

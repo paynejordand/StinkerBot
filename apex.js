@@ -41,7 +41,6 @@ export class ApexConnection {
   }
 
   // Helper functions
-
   closestName(broadcaster_id, name) {
     console.log("Finding closest match for name: " + name);
     try {
@@ -103,6 +102,15 @@ export class ApexConnection {
   handleInitMessage(message, ws) {
     console.log("Initialization message received.");
     console.log(message);
+    if (!message.name) {
+      console.error("Initialization message missing broadcaster name.");
+      return;
+    }
+    if (this.sessions.has(message.name)) {
+      console.log(
+        "Broadcaster " + message.name + " is already connected. Overwriting session."
+      );
+    }
     this.sessions.set(message.name, ws);
     this.swap.set(ws, true);
     this.names.set(ws, new Set());
@@ -136,8 +144,9 @@ export class ApexConnection {
   // Functions for handling requests from twitch/bot
   handleSpectate(broadcaster_id, type, target) {
     if (type === "poi") {
-      target = POI[target] || target;
+      console.log("Changing to POI: " + (POI[target] || target));
       this.sendMessageToWebsocket(JSON.stringify({ changeCam: { poi: target } }), broadcaster_id);
+      target = POI[target] || target;
     } else if (type === "name") {
       target = this.closestName(broadcaster_id, target);
       this.sendMessageToWebsocket(JSON.stringify({ changeCam: { name: target } }), broadcaster_id);
