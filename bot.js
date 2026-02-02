@@ -2,6 +2,9 @@ import { getAuth } from "./auth.js";
 import { ApexConnection } from "./apex.js";
 import { TwitchConnection } from "./twitch.js";
 
+import dotenv from "dotenv";
+dotenv.config();
+
 // Twitch Connection Callbacks
 const handleSpectate = (broadcaster_id, type, target) => {
   console.log("Handling spectate for: " + type + " : " + target);

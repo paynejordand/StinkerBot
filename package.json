@@ -2,6 +2,7 @@
   "name": "StinkerBot",
   "version": "1.0.0",
   "description": "",
+  "type": "module",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -12,6 +13,7 @@
   "packageManager": "pnpm@10.25.0",
   "dependencies": {
     "@neondatabase/serverless": "^1.0.2",
+    "dotenv": "^17.2.3",
     "string-comparison": "^1.3.0",
     "ws": "^8.18.3"
   },

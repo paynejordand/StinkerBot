@@ -1,4 +1,5 @@
-const CLIENT_ID = process.env.CLIENT_ID; // Your Twitch application's Client ID
+import dotenv from "dotenv";
+dotenv.config();
 
 async function validateToken(oauthToken) {
   let response = await fetch("https://id.twitch.tv/oauth2/validate", {
@@ -18,7 +19,7 @@ async function refreshToken(_refreshToken) {
     },
     body:
       "grant_type=refresh_token&client_id=" +
-      CLIENT_ID +
+      process.env.CLIENT_ID +
       "&refresh_token=" +
       _refreshToken +
       "&client_secret=" +
@@ -52,4 +53,4 @@ async function getAuth(oauthToken, _refreshToken) {
   return oauthToken;
 }
 
-export { getAuth, CLIENT_ID };
+export { getAuth };

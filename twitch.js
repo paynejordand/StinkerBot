@@ -1,5 +1,7 @@
 import WebSocket from "ws";
 import { inRange } from "./util.js";
+import dotenv from "dotenv";
+dotenv.config();
 
 const EVENTSUB_WEBSOCKET_URL = "wss://eventsub.wss.twitch.tv/ws";
 const SPECTATE_COOLDOWN_MS = 10 * 1000; // 10 second cooldown
