@@ -215,6 +215,7 @@ export class TwitchConnection {
     }
   }
 
+  // Command Handlers
   handleHelpCommand(broadcaster_id) {
     this.sendChatMessage(
       "Available commands: !spectate <name|(1-6)>, !swap, !score",
