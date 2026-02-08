@@ -16,6 +16,7 @@ export class TwitchConnection {
     this.spectateCooldowns = new Map();
     this.swaps = new Set();
     this.subscription_ids = new Map();
+    this.afk = new Map();
     this.spectateCallback = spectateCallback;
     this.swapCallback = swapCallback;
   }
@@ -114,11 +115,12 @@ export class TwitchConnection {
             const badges = data.payload.event.badges;
 
             const command = message.split(" ")[0];
-            if (command == "!spectate") {
+            const isAfk = this.afk.get(broadcaster_id) || false;
+            if (command == "!spectate" && isAfk) {
               this.handleSpectateCommand(message, broadcaster_id);
-            } else if (command == "!swap") {
+            } else if (command == "!swap" && isAfk) {
               this.handleSwapCommand(broadcaster_id);
-            } else if (command == "!help") {
+            } else if (command == "!help" && isAfk) {
               this.handleHelpCommand(broadcaster_id);
             } else if (command == "!score") {
               this.handleScoreCommand(broadcaster_id);
@@ -129,10 +131,9 @@ export class TwitchConnection {
                 broadcaster_id,
               );
             } else if (command == "!shuffle") {
-              this.handleShuffleCommand(
-                badges,
-                broadcaster_id,
-              );
+              this.handleShuffleCommand(badges, broadcaster_id);
+            } else if (command == "!afk") {
+              this.handleAfkCommand(badges, broadcaster_id);
             }
             break;
         }
@@ -178,6 +179,7 @@ export class TwitchConnection {
     } else {
       const data = await response.json();
       this.subscription_ids[broadcaster_id] = data.data[0].id;
+      this.afk.set(broadcaster_id, false);
       console.log(`Subscribed to channel.chat.message [${data.data[0].id}]`);
     }
   }
@@ -213,6 +215,7 @@ export class TwitchConnection {
       console.error(response);
     } else {
       this.subscription_ids.delete(broadcaster_id);
+      this.afk.delete(broadcaster_id);
       console.log("Successfully unsubscribed from channel.chat.message");
     }
   }
@@ -226,9 +229,10 @@ export class TwitchConnection {
   }
 
   handleSpectateCommand(messageText, broadcaster_id) {
-    const parts = messageText.split(" ");
+    const cmd = messageText.substring(0, messageText.indexOf(" "));
+    const args = messageText.substring(messageText.indexOf(" ") + 1);
 
-    if (parts.length == 1) {
+    if (cmd == "") {
       this.sendChatMessage("Usage: !spectate <name|(1-6)>", broadcaster_id);
       return { type: "invalid", target: null };
     }
@@ -249,19 +253,13 @@ export class TwitchConnection {
     this.spectateCooldowns.set(broadcaster_id, now);
 
     var status = "";
-    if (inRange(parseInt(parts[1]), 1, 6)) {
-      let targetPOI = parseInt(parts[1]);
+    if (args.length == 1 && inRange(parseInt(args), 1, 6)) {
+      let targetPOI = parseInt(args);
+      console.log(args + " is a valid POI number.");
       status = this.spectateCallback(broadcaster_id, "poi", targetPOI);
     } else {
-      let playerName = "";
-      for (let i = 1; i < parts.length; i++) {
-        playerName += parts[i];
-        if (i != parts.length - 1) {
-          playerName += " ";
-        }
-      }
-      console.log("Original player name: " + playerName);
-      status = this.spectateCallback(broadcaster_id, "name", playerName);
+      console.log("Original player name: " + args);
+      status = this.spectateCallback(broadcaster_id, "name", args);
     }
     console.log("Spectate status: " + status);
     this.sendChatMessage(status, broadcaster_id);
@@ -335,6 +333,21 @@ export class TwitchConnection {
     this.swaps.add(broadcaster_id);
     this.sendChatMessage(
       "Will now cycle through damage events!",
+      broadcaster_id,
+    );
+  }
+
+  handleAfkCommand(badges, broadcaster_id) {
+    if (!this.isModerator(badges) && !this.isBroadcaster(badges)) {
+      this.sendChatMessage(
+        "Only mods in this channel can use this command!",
+        broadcaster_id,
+      );
+      return;
+    }
+    this.afk.set(broadcaster_id, !this.afk.get(broadcaster_id));
+    this.sendChatMessage(
+      "Set AFK mode to " + this.afk.get(broadcaster_id),
       broadcaster_id,
     );
   }

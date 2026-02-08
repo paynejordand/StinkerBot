@@ -10,15 +10,19 @@ const POI = {
   6: "Last attacker",
 };
 
+const KRABER = "mp_weapon_sniper";
+
 export class ApexConnection {
-  constructor(initCallback, disconnectCallback) {
+  constructor(initCallback, disconnectCallback, kraberCallback) {
     console.log("ApexConnection constructor called.");
     this.wss = null;
     this.swap = new Map();
     this.names = new Map();
     this.sessions = new Map();
+    this.krabers = new Map();
     this.initCallback = initCallback;
     this.disconnectCallback = disconnectCallback;
+    this.kraberCallback = kraberCallback;
   }
 
   connect() {
@@ -47,8 +51,9 @@ export class ApexConnection {
       const ws = this.sessions.get(broadcaster_id);
       const playerNames = this.names.get(ws);
       if (!playerNames) return name;
-      return sc.jaroWinkler.sortMatch(name, Array.from(playerNames)).pop()
-        .member;
+      const matches = sc.levenshtein.sortMatch(name, Array.from(playerNames));
+      if (matches.length == 0) return name;
+      return matches.pop().member;
     } catch (e) {
       console.error("Error finding closest name: " + e);
       return name;
@@ -80,6 +85,12 @@ export class ApexConnection {
       case "playerDamaged":
         this.handlePlayerDamagedMessage(message, ws);
         break;
+      case "weaponSwitched":
+        this.handleWeaponSwitchedMessage(message, ws);
+        break;
+      case "inventoryDrop":
+        this.handleInventoryDropMessage(message, ws);
+        break;
     }
   }
 
@@ -96,6 +107,7 @@ export class ApexConnection {
     // Clean up names and swap Maps
     this.names.delete(ws);
     this.swap.delete(ws);
+    this.krabers.delete(ws);
   }
 
   // Message Type Handlers
@@ -108,12 +120,15 @@ export class ApexConnection {
     }
     if (this.sessions.has(message.name)) {
       console.log(
-        "Broadcaster " + message.name + " is already connected. Overwriting session."
+        "Broadcaster " +
+          message.name +
+          " is already connected. Overwriting session.",
       );
     }
     this.sessions.set(message.name, ws);
-    this.swap.set(ws, true);
+    this.swap.set(ws, false);
     this.names.set(ws, new Set());
+    this.krabers.set(ws, new Set());
     this.initCallback(message.name);
   }
 
@@ -131,6 +146,10 @@ export class ApexConnection {
     if (matchEndNames) {
       matchEndNames.clear();
     }
+    const kraberSet = this.krabers.get(ws);
+    if (kraberSet) {
+      kraberSet.clear();
+    }
   }
 
   handlePlayerDamagedMessage(message, ws) {
@@ -141,17 +160,55 @@ export class ApexConnection {
     }
   }
 
+  handleWeaponSwitchedMessage(message, ws) {
+    if (
+      message.newWeapon == KRABER &&
+      !this.krabers.get(ws).has(message.player.name)
+    ) {
+      console.log("Kraber picked up by: " + message.player.name);
+      this.krabers.get(ws).add(message.player.name);
+      var broadcaster_id = null;
+      for (const [key, value] of this.sessions.entries()) {
+        if (value === ws) {
+          broadcaster_id = key;
+          break;
+        }
+      }
+      if (!broadcaster_id) {
+        console.log(
+          "Broadcaster ID not found for Kraber pickup on player: " +
+            message.player.name,
+        );
+        return;
+      }
+      this.kraberCallback(broadcaster_id, message.player.name);
+    }
+  }
+
+  handleInventoryDropMessage(message, ws) {
+    if (message.item == "Kraber .50-Cal Sniper (Level 5)") {
+      console.log("Kraber dropped by: " + message.player.name);
+      this.krabers.get(ws).delete(message.player.name);
+    }
+  }
+
   // Functions for handling requests from twitch/bot
   handleSpectate(broadcaster_id, type, target) {
     if (type === "poi") {
       console.log("Changing to POI: " + (POI[target] || target));
-      this.sendMessageToWebsocket(JSON.stringify({ changeCam: { poi: target } }), broadcaster_id);
+      this.sendMessageToWebsocket(
+        JSON.stringify({ changeCam: { poi: target } }),
+        broadcaster_id,
+      );
       target = POI[target] || target;
     } else if (type === "name") {
       target = this.closestName(broadcaster_id, target);
-      this.sendMessageToWebsocket(JSON.stringify({ changeCam: { name: target } }), broadcaster_id);
+      this.sendMessageToWebsocket(
+        JSON.stringify({ changeCam: { name: target } }),
+        broadcaster_id,
+      );
     }
-    
+
     return target;
   }
 
